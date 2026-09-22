@@ -1,233 +1,291 @@
-# Diabetes Prediction Service
+# Diabetes Prediction: Machine Learning Pipeline and Deployment
 
-Production-oriented machine learning service for diabetes risk prediction using
-the Pima Indians Diabetes dataset. The project contains a leakage-safe,
-calibrated SVM pipeline, a FastAPI backend, a Streamlit frontend, automated
-tests, and Docker Compose deployment.
+## Executive Summary
 
-## Architecture
+This project develops and deploys a binary classification model for estimating
+diabetes risk from the Pima Indians Diabetes dataset. It combines exploratory
+data analysis, validated preprocessing, calibrated SVM training, model
+evaluation, and a production-style serving layer.
+
+The final system exposes a FastAPI prediction service and a Streamlit interface.
+The Streamlit application sends requests to FastAPI; the model is loaded and
+validated only by the API service. Docker Compose runs both services together.
+
+> This is an educational risk-estimation project. It is not a medical diagnosis
+> system and must not replace professional clinical judgment.
+
+## Project Objectives
+
+- Build a reproducible diabetes classification workflow.
+- Treat physiologically impossible zero values consistently.
+- Prevent preprocessing leakage between training and test data.
+- Compare model performance using clinically meaningful classification metrics.
+- Expose predictions through a validated HTTP API.
+- Provide a usable frontend for local and containerized demonstrations.
+
+## Dataset
+
+The project uses the Pima Indians Diabetes dataset. It contains 768 patient
+records, eight input features, and a binary `Outcome` target:
+
+| Feature | Description |
+| --- | --- |
+| `Pregnancies` | Number of pregnancies |
+| `Glucose` | Plasma glucose concentration |
+| `BloodPressure` | Diastolic blood pressure |
+| `SkinThickness` | Triceps skin fold thickness |
+| `Insulin` | Two-hour serum insulin |
+| `BMI` | Body mass index |
+| `DiabetesPedigreeFunction` | Diabetes hereditary risk score |
+| `Age` | Age in years |
+| `Outcome` | Target: `0` or `1` |
+
+Source dataset: <https://www.kaggle.com/datasets/mathchi/diabetes-data-set>
+
+## Methodology
+
+### Data quality and preprocessing
+
+Exploratory analysis identified zero values in measurement columns where zero is
+not physiologically meaningful. The workflow treats zeros as missing for:
+
+- Glucose
+- Blood pressure
+- Skin thickness
+- Insulin
+- BMI
+
+`Pregnancies` and `Outcome` retain zero as a valid value. Missing measurements
+are imputed with training-set medians.
+
+All preprocessing is implemented inside the serialized scikit-learn pipeline.
+This ensures that imputation and scaling are fitted only on training data and
+then applied consistently during evaluation and inference.
+
+### Model
+
+The selected estimator is a calibrated Support Vector Machine:
+
+- Standardized numeric features
+- SVM classifier
+- Five-fold probability calibration
+- Five-fold cross-validated hyperparameter search
+- ROC-AUC used as the model-selection metric
+- Stratified 80/20 train/test split
+- Fixed random seed: `42`
+
+Selected configuration:
 
 ```text
-Streamlit UI (8501) --> FastAPI API (8000) --> sklearn model pipeline
-                                             |
-                                             +--> checksum metadata
+C      = 0.1
+kernel = linear
+gamma  = scale
 ```
 
-The API loads one serialized pipeline containing preprocessing, imputation,
-scaling, classification, and probability calibration. The Streamlit app does
-not load the model directly; it calls the FastAPI endpoint over HTTP.
+## Results
 
-## Project structure
+Evaluation was performed on a held-out test set of 154 records.
+
+| Metric | Result |
+| --- | ---: |
+| Accuracy | 0.695 |
+| ROC-AUC | 0.813 |
+| Class 0 precision | 0.743 |
+| Class 0 recall | 0.810 |
+| Class 1 precision | 0.578 |
+| Class 1 recall | 0.481 |
+| Class 1 F1-score | 0.525 |
+
+### Interpretation
+
+- The ROC-AUC of approximately `0.813` indicates useful ranking ability across
+  positive and negative cases.
+- The model recognizes negative cases more reliably than positive cases.
+- The positive-class recall of approximately `48%` means many diabetic cases are
+  not detected at the current operating point.
+- Accuracy alone is therefore insufficient for judging this model.
+- A clinical deployment would require threshold tuning, calibration analysis,
+  external validation, subgroup analysis, and stronger sensitivity requirements.
+
+The metrics are stored in
+[src/models/training_metrics.json](src/models/training_metrics.json).
+
+## System Architecture
 
 ```text
-main.py                         FastAPI application
+User
+  |
+  v
+Streamlit frontend :8501
+  |
+  | HTTP POST /diabetes_prediction
+  v
+FastAPI service :8000
+  |
+  v
+Validated sklearn pipeline
+  |
+  +-- imputation
+  +-- standardization
+  +-- calibrated SVM
+```
+
+The API verifies the model SHA-256 checksum against the training metadata before
+serving traffic. If the artifact is missing or modified, startup fails rather
+than serving an unverified model.
+
+## Repository Structure
+
+```text
+main.py                         FastAPI service
 app.py                          Streamlit frontend
-docker-compose.yml              API and UI orchestration
-Dockerfile                      FastAPI image
-Dockerfile.streamlit             Streamlit image
-pyproject.toml                  Project dependencies and optional extras
-uv.lock                         Reproducible dependency lockfile
+docker-compose.yml              API and frontend orchestration
+Dockerfile                      FastAPI container
+Dockerfile.streamlit             Streamlit container
+pyproject.toml                  Dependencies and optional extras
+uv.lock                         Locked dependency graph
 src/
-  data/diabetes.csv             Source dataset
-  models/diabetes_pipeline.pkl  Trained model pipeline
-  models/training_metrics.json  Metrics and artifact checksum
-  ml_pipeline.py                Shared training and prediction logic
-  train.py                      Training command-line entry point
+  data/diabetes.csv             Input dataset
+  models/diabetes_pipeline.pkl  Serialized preprocessing and model pipeline
+  models/training_metrics.json  Evaluation metrics and artifact metadata
+  ml_pipeline.py                Shared training, validation, and inference logic
+  train.py                      Reproducible training command
   notebooks/                    EDA, preprocessing, training, evaluation, deployment
-tests/                          API and ML pipeline tests
+tests/
+  test_api.py                   API contract tests
+  test_ml_pipeline.py           Data validation tests
 ```
 
-## Requirements
+## Running the Project
 
-- Python 3.12 or newer
-- `uv`
-- Docker Engine and Docker Compose, for containerized execution
+### Local execution
 
-Install `uv` using the official instructions at
-<https://docs.astral.sh/uv/getting-started/installation/>.
-
-## Local setup
-
-From the project root:
+Install the base environment:
 
 ```bash
 uv sync
 ```
 
-Install the optional Streamlit dependencies when running the frontend locally:
-
-```bash
-uv sync --extra ui
-```
-
-Install notebook visualization dependencies when working with EDA notebooks:
-
-```bash
-uv sync --extra notebooks
-```
-
-`uv.lock` is committed and should be used for reproducible environments. Use
-`uv sync --frozen` in automated or deployment environments.
-
-## Train the model
-
-Training validates the input schema, numeric values, target classes, and feature
-ranges. It performs a stratified train/test split and cross-validated
-hyperparameter search without fitting preprocessing on the test data.
+Train or regenerate the model:
 
 ```bash
 uv run python src/train.py
 ```
 
-Generated artifacts:
-
-- `src/models/diabetes_pipeline.pkl`
-- `src/models/training_metrics.json`
-
-The metadata file records accuracy, ROC-AUC, selected parameters, dataset hash,
-model hash, pipeline version, scikit-learn version, and training timestamp.
-
-## Run locally
-
-Start the FastAPI backend:
+Start FastAPI:
 
 ```bash
-uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+uv run uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-Start the Streamlit frontend in a second terminal:
+In another terminal, install the UI extra and start Streamlit:
 
 ```bash
+uv sync --extra ui
 uv run --extra ui streamlit run app.py --server.port 8501
 ```
 
 Open the frontend at <http://localhost:8501>.
 
-FastAPI endpoints:
-
-- API root: <http://localhost:8000/>
-- Health check: <http://localhost:8000/health>
-- Interactive API documentation: <http://localhost:8000/docs>
-- Prediction endpoint: `POST http://localhost:8000/diabetes_prediction`
-
-The frontend uses `API_URL` to locate the backend. It defaults to
-`http://localhost:8000`:
-
-```bash
-API_URL=http://localhost:8000 uv run --extra ui streamlit run app.py
-```
-
-## Run with Docker Compose
-
-Build and start both services:
+### Docker Compose
 
 ```bash
 docker compose up --build
 ```
 
-Open:
+Services:
 
 - Streamlit: <http://localhost:8501>
 - FastAPI: <http://localhost:8000>
-- FastAPI docs: <http://localhost:8000/docs>
+- API documentation: <http://localhost:8000/docs>
+- Health check: <http://localhost:8000/health>
 
-Run in the background:
-
-```bash
-docker compose up --build -d
-```
-
-View service status and logs:
-
-```bash
-docker compose ps
-docker compose logs -f api
-docker compose logs -f ui
-```
-
-Stop the services:
-
-```bash
-docker compose down
-```
-
-If ports are already in use, choose alternative host ports. The values before
-the colon are host ports; container ports remain unchanged:
+If the default ports are occupied:
 
 ```bash
 API_PORT=8001 UI_PORT=8502 docker compose up --build
 ```
 
-Then open <http://localhost:8502> for Streamlit and
-<http://localhost:8001/docs> for FastAPI.
+### API example
 
-## Configuration
+```bash
+curl -X POST http://localhost:8000/diabetes_prediction \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "Pregnancies": 6,
+    "Glucose": 148,
+    "BloodPressure": 72,
+    "SkinThickness": 35,
+    "Insulin": 125,
+    "BMI": 33.6,
+    "DiabetesPedigreeFunction": 0.627,
+    "Age": 50
+  }'
+```
 
-The FastAPI service supports these environment variables:
+The response contains the predicted class, estimated probability, and a human-
+readable result.
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `MODEL_PATH` | `src/models/diabetes_pipeline.pkl` | Model artifact location |
-| `METRICS_PATH` | `src/models/training_metrics.json` | Model metadata location |
-| `PORT` | `8000` | API container port |
+## Validation and Quality Controls
 
-The Streamlit service supports:
+The service and training pipeline enforce:
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `API_URL` | `http://localhost:8000` | FastAPI base URL |
-| `UI_PORT` | `8501` | Compose host port for Streamlit |
-| `API_PORT` | `8000` | Compose host port for FastAPI |
+- Required feature and target columns
+- Numeric input values
+- Finite values
+- Valid feature ranges
+- Binary target values
+- Extra-field rejection at the API boundary
+- Atomic model writes during training
+- Model checksum verification at API startup
+- Reproducible train/test splitting
 
-At startup, FastAPI verifies the model SHA-256 checksum recorded in the
-metadata file. If the artifact is missing or altered, the service fails closed
-instead of serving predictions from an unverified model.
-
-## Testing and quality checks
-
-Run the complete test suite:
+Run the automated tests:
 
 ```bash
 uv run python -m unittest discover -s tests -v
 ```
 
-Compile the Python source:
+Validate Python syntax and the dependency lock:
 
 ```bash
-uv run python -m compileall -q src tests main.py app.py
-```
-
-Validate the dependency lockfile:
-
-```bash
+uv run python -m py_compile main.py app.py src/ml_pipeline.py src/train.py
 uv lock --check
 ```
 
-## Notebook workflow
+## Notebook Workflow
 
-The notebooks are deliberately separated by responsibility:
+The analysis is separated into five notebooks:
 
-1. `00_EDA.ipynb` - exploratory data analysis
-2. `01_Data_Preprocessing.ipynb` - schema and preprocessing validation
-3. `02_Model_Training.ipynb` - model training and artifact creation
-4. `03_Model_Evaluation.ipynb` - held-out evaluation
-5. `04_Deployment.ipynb` - API smoke test and deployment commands
+1. `00_EDA.ipynb` - data exploration and quality analysis
+2. `01_Data_Preprocessing.ipynb` - schema and transformation validation
+3. `02_Model_Training.ipynb` - training and artifact generation
+4. `03_Model_Evaluation.ipynb` - held-out performance evaluation
+5. `04_Deployment.ipynb` - API smoke testing and deployment commands
 
-The reusable implementation in `src/ml_pipeline.py` remains the source of
-truth. Notebooks call that implementation instead of maintaining a separate
-production algorithm.
+The notebooks call the shared implementation in `src/ml_pipeline.py`; the
+production logic is not duplicated across notebook cells.
 
-## Production notes
+## Limitations and Future Improvements
 
-- Do not commit secrets or local `.env` files.
-- Only load trusted model artifacts because joblib uses Python serialization.
-- Keep the model artifact and its metadata file from the same training run.
-- Monitor request latency, error rate, prediction distribution, and model drift
-  in a production environment.
-- This model is an educational risk prediction service, not a medical
-  diagnosis or a substitute for professional clinical judgment.
+- The dataset is relatively small and may not represent current populations.
+- There is no independent external validation dataset.
+- Positive-class recall is not yet strong enough for clinical screening.
+- Threshold selection is not optimized for a specific clinical cost function.
+- Fairness and subgroup performance analysis should be added.
+- Production monitoring should track latency, errors, drift, and prediction
+  distribution.
+- Model versioning should eventually move from local files to a trusted model
+  registry.
 
-## Dataset
+## Conclusion
 
-The original dataset is available from Kaggle:
-<https://www.kaggle.com/datasets/mathchi/diabetes-data-set>
+The project demonstrates a complete, reproducible ML lifecycle from data
+exploration through deployment. The calibrated SVM provides meaningful ranking
+performance, with an ROC-AUC of approximately `0.813`, and is packaged behind a
+validated FastAPI contract with a Streamlit frontend.
+
+The main technical conclusion is that the system is suitable as a working
+engineering demonstration and research baseline. It is not yet suitable for
+clinical decision-making because positive-case recall remains limited and the
+model has not undergone external, fairness, or prospective validation.
