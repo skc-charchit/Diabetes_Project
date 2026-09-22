@@ -203,9 +203,6 @@ Validate the dependency lockfile:
 uv lock --check
 ```
 
-CI runs the lockfile check, unit tests, and compilation checks on every push
-and pull request.
-
 ## Notebook workflow
 
 The notebooks are deliberately separated by responsibility:

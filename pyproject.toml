@@ -18,6 +18,9 @@ dependencies = [
 ui = ["streamlit"]
 notebooks = ["matplotlib", "seaborn"]
 
+[dependency-groups]
+dev = ["httpx2"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
