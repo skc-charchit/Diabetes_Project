@@ -1,30 +1,26 @@
-FROM python:3.9-slim
+FROM python:3.12-slim
+
+COPY --from=ghcr.io/astral-sh/uv:0.9.7 /uv /uvx /bin/
 
 WORKDIR /app
 
-COPY . /app/
+ENV PYTHONDONTWRITEBYTECODE=1 \
+	PYTHONUNBUFFERED=1 \
+	UV_COMPILE_BYTECODE=1 \
+	UV_LINK_MODE=copy \
+	PORT=8000
 
-# Print the current working directory
-RUN pwd
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
 
-# List the contents of the working directory
-RUN ls -la
+COPY . .
+RUN uv sync --frozen --no-dev
+RUN useradd --create-home --uid 10001 appuser && chown -R appuser:appuser /app
+USER appuser
 
-# Install dependencies
-RUN pip install --no-cache-dir --upgrade -r requirements.txt
+EXPOSE 8000
 
-# Set environment variables
-ENV MONGODB_CONNECTION_URI=${MONGODB_CONNECTION_URI}
-ENV DB_NAME=${DB_NAME}
-ENV COLLECTION_NAME=${COLLECTION_NAME}
-ENV PORT=8001
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+	CMD python -c 'import os, urllib.request; urllib.request.urlopen("http://127.0.0.1:%s/health" % os.getenv("PORT", "8000"), timeout=3)'
 
-# Print environment variables for debugging purposes
-RUN echo "MongoDB URI: ${MONGODB_CONNECTION_URI}"
-RUN echo "DB Name: ${DB_NAME}"
-RUN echo "Collection Name: ${COLLECTION_NAME}"
-RUN echo "Port: ${PORT}"
-
-EXPOSE 8001
-
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8001"]
+CMD ["sh", "-c", "uv run --frozen --no-dev uvicorn main:app --host 0.0.0.0 --port ${PORT}"]
